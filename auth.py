@@ -51,7 +51,7 @@ def send_email(recipient_email: str, subject: str, message: str):
     msg['From'] = EMAIL_HOST_USER
     msg['To'] = recipient_email
     msg['Subject'] = subject
-    msg.attach(MIMEText(message, 'plain'))
+    msg.attach(MIMEText(message, 'html'))
 
     with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
         server.starttls()  # Start TLS encryption
@@ -71,15 +71,29 @@ async def create_user(create_user_request: CreateUserRequest, db: Session = Depe
     db.commit()
     
     token = create_access_token(create_user_request.username, create_user_model.id, timedelta(minutes=20))
+    print('➡ auth.py:74 token:', token)
+    
+    base_url = f'http://127.0.0.1:8000/auth/verify-email?token={token}'
+    
+    # token_link = f"{base_url}/verify-email?token={token}"
     
     recipient_email = create_user_model.username
     print('➡ auth.py:76 recipient_email:', recipient_email)
-    subject="test subject"
-    message =  f"Here is your access token {token}"
+    subject="Verify your email"
+    message = f"Click the following link to verify your email: {base_url}"
+    html_txt = f"""<!DOCTYPE html>
+        <html lang="en">
+            <head></head>
+            <body>
+            Click the following link to verify your email: <a href='{base_url}'>link</a>
+            </body>
+        </html>"""
+    message = html_txt
+
     send_email(recipient_email, subject, message)
 
 
-@router.post("/verify-email")
+@router.get("/verify-email")
 async def verify_email(token: str, db: Session = Depends(get_db)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -109,7 +123,7 @@ async def verify_email(token: str, db: Session = Depends(get_db)):
             detail="Invalid token."
         )
 
-@router.post("/login", response_model=Token)
+@router.post("/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = authenticate_user(form_data.username, form_data.password, db)
     if not user:
@@ -118,10 +132,12 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
             detail="Invalid username or password.")
     token = create_access_token(user.username, user.id, timedelta(minutes=20))
 
-    return {"access_token": token, "token_type": "bearer"} 
+    return {"access_token": token, "token_type": "bearer"}
+
 
 def authenticate_user(username: str, password: str, db):
     user = db.query(Users).filter(Users.username == username).first()
+    print('➡ auth.py:128 user:', user)
     if not user:
         return False
     if not bcrypt_context.verify(password, user.hashed_password):
@@ -134,6 +150,7 @@ def create_access_token(username: str, user_id: int, expires_delta: timedelta):
     expires = datetime.utcnow() + expires_delta
     encode.update({'exp': expires})
     return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
+
 
 async def get_current_user(token: str = Depends(oauth2_bearer)):
     try:
