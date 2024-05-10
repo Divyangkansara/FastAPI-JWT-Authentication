@@ -7,10 +7,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette import status
 from database import SessionLocal
-from models import Users
+from models import Users, Role
 from passlib.context import CryptContext
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
+from sqlalchemy.orm.exc import NoResultFound
+from typing import List, Optional
+
 
 router = APIRouter(
     prefix='/auth',
@@ -34,10 +37,12 @@ EMAIL_HOST_PASSWORD= '#Kansara@4698$'
 class CreateUserRequest(BaseModel):
     username: str
     password: str
+    is_email_verified: bool = False
 
 class Token(BaseModel):
     access_token: str
     token_type: str
+
 
 def get_db():
     db = SessionLocal()
@@ -45,6 +50,16 @@ def get_db():
         yield db
     finally:
         db.close()
+        
+class CreateRoleRequest(BaseModel):
+    name: str
+
+@router.post("/roles", status_code=status.HTTP_201_CREATED)
+async def create_role(create_role_request: CreateRoleRequest, db: Session = Depends(get_db)):
+    role = Role(name=create_role_request.name)
+    db.add(role)
+    db.commit()
+    return role
 
 def send_email(recipient_email: str, subject: str, message: str):
     msg = MIMEMultipart()
@@ -61,25 +76,41 @@ def send_email(recipient_email: str, subject: str, message: str):
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_user(create_user_request: CreateUserRequest, db: Session = Depends(get_db)):
-    create_user_model = Users(
+async def create_user(create_user_request: CreateUserRequest, roles: List[str], db: Session = Depends(get_db)):
+    default_role = db.query(Role).filter(Role.name == "user").first()
+
+    if not default_role:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Default role 'user' not found in the database."
+        )
+    
+    new_user = Users(
         username=create_user_request.username,
-        hashed_password=bcrypt_context.hash(create_user_request.password)
+        hashed_password=bcrypt_context.hash(create_user_request.password),
+        is_email_verified=create_user_request.is_email_verified,
+        roles=default_role.name
     )
 
-    db.add(create_user_model)
+    if roles:
+        for role_name in roles:
+            try:
+                roles = db.query(Role).filter(Role.name == role_name).one()
+                new_user.roles = roles.name
+            except NoResultFound:
+                pass
+
+    db.add(new_user)
     db.commit()
-    
-    token = create_access_token(create_user_request.username, create_user_model.id, timedelta(minutes=20))
+
+    token = create_access_token(create_user_request.username, new_user.id, timedelta(minutes=20))
     print('➡ auth.py:74 token:', token)
-    
+
     base_url = f'http://127.0.0.1:8000/auth/verify-email?token={token}'
-    
-    # token_link = f"{base_url}/verify-email?token={token}"
-    
-    recipient_email = create_user_model.username
+
+    recipient_email = new_user.username
     print('➡ auth.py:76 recipient_email:', recipient_email)
-    subject="Verify your email"
+    subject = "Verify your email"
     message = f"Click the following link to verify your email: {base_url}"
     html_txt = f"""<!DOCTYPE html>
         <html lang="en">
@@ -91,6 +122,10 @@ async def create_user(create_user_request: CreateUserRequest, db: Session = Depe
     message = html_txt
 
     send_email(recipient_email, subject, message)
+
+    return new_user
+
+
 
 
 @router.get("/verify-email")
@@ -129,12 +164,13 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password.")
+            detail="Invalid username or password."
+            )
+     
     token = create_access_token(user.username, user.id, timedelta(minutes=20))
 
     return {"access_token": token, "token_type": "bearer"}
-
-
+ 
 def authenticate_user(username: str, password: str, db):
     user = db.query(Users).filter(Users.username == username).first()
     print('➡ auth.py:128 user:', user)
@@ -166,3 +202,4 @@ async def get_current_user(token: str = Depends(oauth2_bearer)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token.")
+    

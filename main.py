@@ -7,6 +7,7 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from typing import List, Optional
 from models import Student as StudentDBModel
+from models import Role as RoleModel
 from database import SessionLocal, engine
 from datetime import datetime, timedelta
 import auth
@@ -19,6 +20,8 @@ load_dotenv()
 app = FastAPI()
 app.include_router(auth.router)
 Base.metadata.create_all(bind=engine)
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class Student(BaseModel):
     first_name: str
@@ -62,7 +65,6 @@ def update_student(student_id: int, student: Student, user: Session = Depends(ge
     db.refresh(db_student)
     return db_student
 
-
 @app.delete("/students/{student_id}")
 def delete_student(student_id: int, user: Session = Depends(get_current_user), db: Session = Depends(get_db)):
     db_student = get_stud_info(db, student_id)
@@ -71,5 +73,4 @@ def delete_student(student_id: int, user: Session = Depends(get_current_user), d
     db.delete(db_student)
     db.commit()
     return {"message": "Student deleted successfully"}
-
 
